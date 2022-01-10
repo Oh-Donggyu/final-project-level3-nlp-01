@@ -105,14 +105,14 @@ Encoder, decoder, grafting module은 아래와 같이 사용하였습니다.
 ## 모델 경량화
 ### DistilBERT + TinyBERT
 - Embedding Layer Distillation
-    - $L_{embd} = MSE(E^SW_e, E^T)$
+    - <img src="https://render.githubusercontent.com/render/math?math=L_{embd} = MSE(E^SW_e, E^T)">
 
 - Transformer Layer Distillation
     - Teacher 모델의 각 hidden layer output 과 attention matrix를 이용했습니다.
-    - $L_{hidn} = MSE(H_SW_h, H_T)$
-    - $L_{attn} = \frac{1}{h}\Sigma_{i=1}^{h}{MSE(A_i^S, A_i^T)}$
+    - <img src="https://render.githubusercontent.com/render/math?math=L_{hidn} = MSE(H_SW_h, H_T)">
+    - <img src="https://render.githubusercontent.com/render/math?math=L_{attn} = \frac{1}{h}\Sigma_{i=1}^{h}{MSE(A_i^S, A_i^T)}">
 - Prediction Layer Distillation
-    - $L_{pred} = CE(z^T/t, z^S/t)$
+  - <img src="https://render.githubusercontent.com/render/math?math=L_{pred} = CE(z^T/t, z^S/t)">
     
 ### Weight Distillation
 - Teacher 모델의 학습된 Weight를 Student 모델에 전이하고자 하는 시도를 하였습니다.
