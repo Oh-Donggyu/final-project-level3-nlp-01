@@ -7,6 +7,13 @@
 </div>
 
 
+<br></br>
+
+[▷ Project Details  -  개인 리포트](https://nbviewer.org/github/Oh-Donggyu/final-project-level3-nlp-01/blob/master/%EB%8B%A4%EA%B5%AD%EC%96%B4%20%EC%B1%84%ED%8C%85%20%EC%84%9C%EB%B9%84%EC%8A%A4%20Project%20Report%20%28%EC%98%A4%EB%8F%99%EA%B7%9C%29.pdf)
+
+<br></br>
+
+
 ## 팀원 소개
 
 
