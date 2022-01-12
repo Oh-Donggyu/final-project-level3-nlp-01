@@ -6,8 +6,12 @@ from transformers.generation_utils import GenerationMixin
 from transformers.file_utils import PushToHubMixin
 from transformers.modeling_utils import ModuleUtilsMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
-from transformers.models.bart.modeling_bart import BartEncoderLayer, BartDecoderLayer
-from transformers.models.bart.modeling_bart import _expand_mask, _make_causal_mask
+from transformers.models.bart.modeling_bart import (
+    BartEncoderLayer, 
+    BartDecoderLayer,
+    _expand_mask, 
+    _make_causal_mask
+)
 
 
 class GraftAttentionModule(nn.Module):
@@ -114,12 +118,6 @@ class GrafomerModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
                                         output_hidden_states=output_hidden_states,
                                         return_dict=return_dict)
         
-        # If the user passed a tuple for encoder_outputs, we wrap it in a BaseModelOutput when return_dict=True
-        elif return_dict and not isinstance(encoder_outputs, BaseModelOutput):
-            encoder_outputs = BaseModelOutput(last_hidden_state=encoder_outputs[0],
-                                            hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
-                                            attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None)
-
         # train
         if decoder_input_ids is not None:
             decoder_outputs = self.decoder_body(input_ids=decoder_input_ids,
@@ -159,10 +157,30 @@ class GrafomerModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
             logits=output_hidden_states
         )
         
-    def prepare_inputs_for_generation(self, input_ids, past=None, **kwargs):
+    def prepare_inputs_for_generation(
+        self,
+        decoder_input_ids,
+        past=None,
+        attention_mask=None,
+        head_mask=None,
+        decoder_head_mask=None,
+        cross_attn_head_mask=None,
+        use_cache=None,
+        encoder_outputs=None,
+        **kwargs
+    ):
+        # cut decoder_input_ids if past is used
         if past is not None:
-            # print(past, type(past))
-            # print(len(past))
-            # print(past.shape)
-            pass
-        return {"input_ids": input_ids, **kwargs}
+            decoder_input_ids = decoder_input_ids[:, -1:]
+
+        return {
+            "input_ids": None,  # encoder_outputs is defined. input_ids not needed
+            "encoder_outputs": encoder_outputs,
+            "past_key_values": past,
+            "decoder_input_ids": decoder_input_ids,
+            "attention_mask": attention_mask,
+            "head_mask": head_mask,
+            "decoder_head_mask": decoder_head_mask,
+            "cross_attn_head_mask": cross_attn_head_mask,
+            "use_cache": use_cache,  # change this to avoid caching (presumably for debugging)
+        }

@@ -34,11 +34,6 @@ def postprocess_text(preds, labels):
     return preds, labels
 
 
-def load_data(path):
-    _train, _valid = load_dataset(path, split=["train[1%:]", "train[:1%]"], use_auth_token="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")
-    return _train, _valid
-
-
 @dataclass
 class CustomDataCollator:
     """ variant of DataCollatorForSeq2Seq """

@@ -1,25 +1,31 @@
+import os
 import random
 import math
 import logging
 import argparse
 from tqdm import tqdm
-import os
 
 import yaml
 import hydra
 from omegaconf import OmegaConf
 
+import datasets
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from datasets import load_metric
-from transformers import AutoConfig, AutoTokenizer
-from transformers import set_seed, get_cosine_schedule_with_warmup, AdamW
+from datasets import load_from_disk, load_metric
+from transformers import (
+    AutoConfig, 
+    AutoTokenizer,
+    set_seed, 
+    get_cosine_schedule_with_warmup,
+    DataCollatorForSeq2Seq, 
+    AdamW
+)
 
 from model import GrafomerModel
-from utils import preprocess_function_with_setting, load_data, postprocess_text, CustomDataCollator
+from utils import preprocess_function_with_setting, postprocess_text, CustomDataCollator
 
-from datasets import load_from_disk
 
 logger = logging.getLogger(__name__)
 formatter = logging.Formatter("%(asctime)s [%(levelname)s]: %(message)s")
@@ -27,12 +33,72 @@ file_handler = logging.FileHandler(filename='train.log')
 logger.addHandler(file_handler)
 
 
+def load_data(data_path: str):
+
+    raw_dataset = load_from_disk(data_path)
+    return raw_dataset["train"], raw_dataset["validation"]
+
+
+def convert_data_to_features(
+    train_dataset: datasets.Dataset, 
+    valid_dataset: datasets.Dataset, 
+    encoder_tokenizer, 
+    decoder_tokenizer, 
+    need_prefix=False,
+):
+    fn_kwargs = {"max_length": 512, "max_target_length": 1024}
+    train_features = train_dataset.map(
+        preprocess_function_with_setting(
+            encoder_tokenizer, decoder_tokenizer, need_prefix=need_prefix
+        ),  # encoder tokenizer, decoder tokenizer, switch: bool, need_prefix: bool
+        num_proc=8, 
+        batched=True, 
+        remove_columns=train_dataset.column_names,
+        fn_kwargs = fn_kwargs,
+    )
+    valid_features = valid_dataset.map(
+        preprocess_function_with_setting(
+            encoder_tokenizer, decoder_tokenizer, need_prefix=need_prefix
+        ),  # encoder tokenizer, decoder tokenizer, switch: bool, need_prefix: bool
+        num_proc=8,
+        batched=True, 
+        remove_columns=valid_dataset.column_names,
+        fn_kwargs = fn_kwargs,
+    )
+
+    return train_features, valid_features
+
+
+def convert_data_to_dataloader(preprocessed_train, preprocessed_valid, batch_size, data_collator):
+    
+    train_dataloader = DataLoader(
+        preprocessed_train, 
+        batch_size=batch_size, 
+        pin_memory=True, 
+        num_workers=8,
+        shuffle=True, 
+        drop_last=True, 
+        collate_fn=data_collator
+    )
+    valid_dataloader = DataLoader(
+        preprocessed_valid, 
+        batch_size=batch_size, 
+        pin_memory=True, 
+        num_workers=8, 
+        shuffle=True, 
+        drop_last=False, 
+        collate_fn=data_collator
+    )
+
+    return train_dataloader, valid_dataloader
+
+
 @hydra.main(config_path='./configs', config_name="config.yaml")
 def main(cfg):
     
     # Config
-    print("\n====== Using Hydra Configurations ======")
-    print(OmegaConf.to_yaml(cfg, resolve=True))
+    logger.info("\n====== Using Hydra Configurations ======")
+    logger.info(OmegaConf.to_yaml(cfg, resolve=True))
     
     if cfg.train_config.seed:
         logger.info(f"set the seed in ``random``, ``numpy``, ``torch`` at {cfg.train_config.seed}")
@@ -45,40 +111,34 @@ def main(cfg):
     decoder_tokenizer = getattr(__import__("transformers"), cfg.decoder.tokenizer).from_pretrained(dec_name) # target lang
     
     model = GrafomerModel(enc_name, dec_name, cfg)
-    print(f"number of model parameters: {model.num_parameters()}")
+    logger.info(f"number of model parameters: {model.num_parameters()}")
     
-    # Temp: 만약 decoder tokenizer에 bos token 추가가 필요하다면 주석 해제
-    # special_tokens_dict = {"additional_special_tokens": [cfg.decoder.bos_token]}
-    # decoder_tokenizer.add_special_tokens(special_tokens_dict=special_tokens_dict)
-    # model.decoder.resize_token_embeddings(len(decoder_tokenizer))
-    # decoder_tokenizer_tokenizer.bos_token = cfg.decoder.bos_token
-    
-    # Temp: 따로 모델에 bos token의 embedding을 늘려줄 필요가 없을 때는 위 주석 코드 말고 여기만 사용
-    # e.g. 중국어 gpt는 bert tokenizer를 사용해서 모델 임베딩은 바꿔줄 필요없이 bos token으로 cls 토큰을 설정해주시만 하면 됨.
-    if decoder_tokenizer.bos_token is None:
-        decoder_tokenizer.bos_token = cfg.decoder.bos_token
-
     
     # TODO Data Loader
-    # train_set, valid_set = load_data(cfg.data.ko_ja)
-    # train_set, valid_set = load_data(cfg.train_config.data_path)
-    raw_dataset = load_from_disk("/opt/ml/final-project-level3-nlp-01/cn_unified_dataset")
-    train_set, valid_set = raw_dataset["train"], raw_dataset["validation"]
+    train_set, valid_set = load_data(cfg.train_config.data_path)
     
-    fn_kwargs = cfg.data.fn_kwargs
-    tokenized_train = train_set.map(preprocess_function_with_setting(encoder_tokenizer, decoder_tokenizer, cfg.data.switch, cfg.decoder.need_prefix), 
-                                    num_proc=8, batched=True, remove_columns=train_set.column_names, fn_kwargs=fn_kwargs)
-    tokenized_valid = valid_set.map(preprocess_function_with_setting(encoder_tokenizer, decoder_tokenizer, cfg.data.switch, cfg.decoder.need_prefix),
-                                    num_proc=8, batched=True, remove_columns=valid_set.column_names, fn_kwargs=fn_kwargs)
+    tokenized_train, tokenized_valid = convert_data_to_features(
+        train_dataset = train_set, 
+        valid_dataset = valid_set, 
+        encoder_tokenizer = encoder_tokenizer, 
+        decoder_tokenizer = decoder_tokenizer, 
+        need_prefix = cfg.decoder.need_prefix
+    )
 
-    data_collator = CustomDataCollator(encoder_pad_token_id=encoder_tokenizer.pad_token_id, decoder_pad_token_id=decoder_tokenizer.pad_token_id)
-    train_dataloader = DataLoader(tokenized_train, batch_size=cfg.train_config.batch_size, pin_memory=True,
-                                  shuffle=True, drop_last=True, num_workers=8, collate_fn=data_collator)
-    valid_dataloader = DataLoader(tokenized_valid, batch_size=cfg.train_config.batch_size, pin_memory=True, 
-                                  shuffle=False, drop_last=False, num_workers=8, collate_fn=data_collator)
+    data_collator = CustomDataCollator(
+        encoder_pad_token_id = encoder_tokenizer.pad_token_id, 
+        decoder_pad_token_id = decoder_tokenizer.pad_token_id,
+    )  # encoder_pad_token_id, decoder_pad_token_id
+    
+    train_dataloader, valid_dataloader = convert_data_to_dataloader(
+        preprocessed_train = tokenized_train, 
+        preprocessed_valid = tokenized_valid, 
+        batch_size = cfg.train_config.batch_size, 
+        data_collator = data_collator,
+    )
 
-    print("전처리 결과 한번 확인\n", decoder_tokenizer.batch_decode(next(iter(train_dataloader))["decoder_input_ids"]))
-
+    print("전처리 결과 확인\n", encoder_tokenizer.batch_decode(next(iter(train_dataloader))["input_ids"]))
+    print(decoder_tokenizer.batch_decode(next(iter(train_dataloader))["labels"]))
 
     # TODO Decoder Model Freeze
     for param in model.decoder.parameters():
@@ -171,12 +231,6 @@ def main(cfg):
 
                     eval_batch = {k: v.to(device) for k, v in eval_batch.items()}
 
-                    """
-                    output = my_model.generate(input_ids, attention_mask=attention_mask , max_length=1025,
-                    pad_token_id=pad_token_id, bos_token_id=bos_token_id, eos_token_id=eos_token_id,
-                    num_beams=5, temperature=0.9, top_k=50, top_p=1.0, 
-                    repetition_penalty=1.0, use_cache=True)
-                    """
                     with torch.no_grad():
                         
                         # decoder_input_ids = torch.ones((cfg.train_config.batch_size, 1), dtype=torch.long, device=device) * decoder_tokenizer.bos_token_id
